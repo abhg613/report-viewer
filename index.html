@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Report Viewer</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --card:#1a1f26; --text:#e7eaee; --muted:#9aa3ad; --line:#2a313a; --accent:#5b8cff; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:1000px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; }
+  input[type=text] { flex:1 1 320px; min-width:0; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font-size:15px; }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:15px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .opts { margin:10px 0 16px; color:var(--muted); font-size:13px; display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+  .player { position:relative; width:100%; aspect-ratio:16/9; background:#000; border-radius:10px; overflow:hidden; }
+  .player iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#888; }
+  .msg { color:#dc2626; min-height:20px; margin:6px 0; font-size:14px; }
+  h2 { font-size:15px; margin:24px 0 8px; color:var(--muted); font-weight:600; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:8px; align-items:center; padding:8px 10px; background:var(--card); border:1px solid var(--line); border-radius:8px; margin-bottom:6px; }
+  li a { flex:1; color:var(--text); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  li button { padding:2px 8px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Report Viewer</h1>
+  <div class="bar">
+    <input id="url" type="text" placeholder="Paste a link (video, youtu.be, shorts or playlist)" autocomplete="off">
+    <button id="play">Open</button>
+    <button id="paste" class="ghost">Paste</button>
+  </div>
+  <div class="opts">
+    <label>Source:
+      <select id="host">
+        <option value="https://www.youtube.com">Option A</option>
+        <option value="https://www.youtube-nocookie.com">Option B</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="auto"> Autoplay</label>
+    <span>If one option doesn't play, switch to the other.</span>
+  </div>
+  <div class="msg" id="msg"></div>
+  <div class="player" id="player"><div class="empty">Nothing loaded</div></div>
+
+  <h2>Recent</h2>
+  <ul id="recent"></ul>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+
+function parse(input) {
+  input = input.trim();
+  if (/^[\w-]{11}$/.test(input)) return { id: input };
+  let u;
+  try { u = new URL(input.startsWith('http') ? input : 'https://' + input); } catch { return null; }
+  const list = u.searchParams.get('list');
+  let id = null;
+  if (u.hostname.includes('youtu.be')) id = u.pathname.slice(1, 12);
+  else if (u.searchParams.get('v')) id = u.searchParams.get('v');
+  else {
+    const m = u.pathname.match(/\/(?:shorts|embed|live|v)\/([\w-]{11})/);
+    if (m) id = m[1];
+  }
+  const t = u.searchParams.get('t') || u.searchParams.get('start');
+  const start = t ? parseInt(String(t).replace(/s$/, ''), 10) || 0 : 0;
+  if (!id && !list) return null;
+  return { id, list, start };
+}
+
+function load(raw, save = true) {
+  const p = parse(raw);
+  if (!p) { $('msg').textContent = "That link doesn't look right."; return; }
+  $('msg').textContent = '';
+  const host = $('host').value;
+  const params = new URLSearchParams();
+  if ($('auto').checked) params.set('autoplay', '1');
+  if (p.start) params.set('start', p.start);
+  let src;
+  if (p.id) {
+    if (p.list) params.set('list', p.list);
+    src = `${host}/embed/${p.id}` + (params.toString() ? `?${params}` : '');
+  } else {
+    params.set('list', p.list);
+    src = `${host}/embed/videoseries?${params}`;
+  }
+  $('player').innerHTML =
+    `<iframe src="${src}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+      referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
+  if (save) {
+    const key = p.id || p.list;
+    let recent = store.get('recent', []).filter(r => r.key !== key);
+    recent.unshift({ key, raw: raw.trim() });
+    store.set('recent', recent.slice(0, 15));
+    renderRecent();
+  }
+}
+
+function renderRecent() {
+  const ul = $('recent');
+  ul.innerHTML = '';
+  store.get('recent', []).forEach(r => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.textContent = r.raw;
+    a.onclick = () => { $('url').value = r.raw; load(r.raw, false); window.scrollTo(0, 0); };
+    const x = document.createElement('button');
+    x.className = 'ghost'; x.textContent = '×';
+    x.onclick = () => { store.set('recent', store.get('recent', []).filter(i => i.key !== r.key)); renderRecent(); };
+    li.append(a, x);
+    ul.append(li);
+  });
+  if (!ul.children.length) ul.innerHTML = '<li style="color:var(--muted)">None yet</li>';
+}
+
+$('play').onclick = () => load($('url').value);
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') load($('url').value); });
+$('paste').onclick = async () => {
+  try { $('url').value = await navigator.clipboard.readText(); load($('url').value); }
+  catch { $('url').focus(); }
+};
+$('host').value = store.get('host2', $('host').value);
+$('host').onchange = () => { store.set('host2', $('host').value); if ($('url').value) load($('url').value, false); };
+
+// support ?v=LINK in the address bar
+const q = new URLSearchParams(location.search).get('v');
+if (q) { $('url').value = q; load(q); }
+renderRecent();
+</script>
+</body>
+</html>
